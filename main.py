@@ -4,7 +4,8 @@ from types import SimpleNamespace as SN
 from pathlib import Path
 from tqdm import tqdm
 from datetime import datetime
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
+import matplotlib
 from collections import deque
 
 import torch
@@ -15,26 +16,24 @@ import fym.logging as logging
 from dynamics import PointMass2DPathFollowing
 from postProcessing import PostProcessing
 
-torch.manual_seed(0)
-np.random.seed(0)
-random.seed(0)
+matplotlib.use('Agg')
 
 def load_config():
     cfg = SN()
     cfg.dt = 0.1
     cfg.max_t = 10.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
-    cfg.num_train = 10
-    cfg.num_eval = 5
+    cfg.num_train = 50000
+    cfg.num_eval = 1000
 
     cfg.quad = SN()
     cfg.quad.tau_speed = 0.1
     cfg.quad.tau_yaw = 0.3
     cfg.quad.init_pos = np.vstack((-8., 5.))
-    cfg.quad.init_speed = 1
-    cfg.quad.init_yaw = np.pi/4
+    cfg.quad.init_speed = 0.5
+    cfg.quad.init_yaw = -np.pi/4
     cfg.quad.rand_pos = [[-12., 12.], [-8., 8.]]
-    cfg.quad.rand_speed = [-3., 3.]
+    cfg.quad.rand_speed = [-15., 15.]
     cfg.quad.rand_yaw = [-np.pi, np.pi]
 
     cfg.traj = SN()
@@ -44,15 +43,21 @@ def load_config():
     cfg.ddpg = SN()
     cfg.ddpg.dim_state = 4
     cfg.ddpg.dim_action = 2
-    cfg.ddpg.action_max = np.array([3., np.pi])
-    cfg.ddpg.action_min = np.array([-3., -np.pi])
+    cfg.ddpg.action_max = np.array([3., np.pi/2])
+    cfg.ddpg.action_min = np.array([-3., -np.pi/2])
     cfg.ddpg.action_scaling = torch.from_numpy(cfg.ddpg.action_max).float()
-    cfg.ddpg.memory_size = 20000
+    cfg.ddpg.memory_size = 300000
     cfg.ddpg.actor_lr = 0.0001
     cfg.ddpg.critic_lr = 0.001
     cfg.ddpg.batch_size = 64
     cfg.ddpg.discount = 0.999
-    cfg.ddpg.softupdate_rate = 0.01
+    cfg.ddpg.softupdate_rate = 0.001
+    cfg.ddpg.terminate_condition = 10
+    cfg.ddpg.reward_weight = 20
+    cfg.ddpg.reward_max = 210
+    # cfg.ddpg.actor_node = 64
+    # cfg.ddpg.critic_node = 64
+    cfg.ddpg.node_set = [64, 128, 256]
 
     cfg.noise = SN()
     cfg.noise.rho = 0.01
@@ -68,44 +73,38 @@ def load_config():
 class ActorNet(nn.Module):
     def __init__(self, cfg):
         super(ActorNet, self).__init__()
-        self.lin1 = nn.Linear(cfg.dim_state, 8)
-        self.lin2 = nn.Linear(8, 16)
-        self.lin3 = nn.Linear(16, 8)
-        self.lin4 = nn.Linear(8, cfg.dim_action)
+        self.lin1 = nn.Linear(cfg.dim_state, cfg.actor_node)
+        self.lin2 = nn.Linear(cfg.actor_node, cfg.actor_node)
+        self.lin3 = nn.Linear(cfg.actor_node, cfg.dim_action)
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
-        self.bn1 = nn.BatchNorm1d(8)
-        self.bn2 = nn.BatchNorm1d(16)
-        self.bn3 = nn.BatchNorm1d(8)
+        self.bn1 = nn.BatchNorm1d(cfg.actor_node)
+        self.bn2 = nn.BatchNorm1d(cfg.actor_node)
         self.cfg = cfg
 
     def forward(self, state):
         x1 = self.relu(self.bn1(self.lin1(state)))
         x2 = self.relu(self.bn2(self.lin2(x1)))
-        x3 = self.relu(self.bn3(self.lin3(x2)))
-        x4 = self.tanh(self.lin4(x3))
-        x_scaled = x4 * self.cfg.action_scaling
+        x3 = self.tanh(self.lin3(x2))
+        x_scaled = x3 * self.cfg.action_scaling
         return x_scaled
 
 class CriticNet(nn.Module):
     def __init__(self, cfg):
         super(CriticNet, self).__init__()
-        self.lin1 = nn.Linear(cfg.dim_state, 8)
-        self.lin2 = nn.Linear(cfg.dim_action+8, 16)
-        self.lin3 = nn.Linear(16, 8)
-        self.lin4 = nn.Linear(8, 1)
+        self.lin1 = nn.Linear(cfg.dim_state, cfg.critic_node-cfg.dim_action)
+        self.lin2 = nn.Linear(cfg.critic_node, cfg.critic_node)
+        self.lin3 = nn.Linear(cfg.critic_node, 1)
         self.relu = nn.ReLU()
-        self.bn1 = nn.BatchNorm1d(8)
-        self.bn2 = nn.BatchNorm1d(16)
-        self.bn3 = nn.BatchNorm1d(8)
+        self.bn1 = nn.BatchNorm1d(cfg.critic_node-cfg.dim_action)
+        self.bn2 = nn.BatchNorm1d(cfg.critic_node)
 
     def forward(self, state, action):
         x1 = self.relu(self.bn1(self.lin1(state)))
         x_cat = torch.cat((x1, action), dim=1)
         x2 = self.relu(self.bn2(self.lin2(x_cat)))
-        x3 = self.relu(self.bn3(self.lin3(x2)))
-        x4 = self.lin4(x3)
-        return x4
+        x3 = self.lin3(x2)
+        return x3
 
 class DDPG:
     def __init__(self, cfg):
@@ -230,13 +229,15 @@ def train(cfg, env, agent, noise, epi):
     noise.reset()
     while True:
         agent.set_eval_mode()
+        # action = agent.get_action(x) + noise.get_noise()/(epi/cfg.noise.tau+1)
         action = np.clip(
             agent.get_action(x) + noise.get_noise()/(epi/cfg.noise.tau + 1),
             cfg.ddpg.action_max,
             cfg.ddpg.action_min
         )
         xn, r, done  = env.step(action)
-        item = (x.squeeze(), action, r, xn.squeeze(), done)
+        r_scaled = (r + cfg.ddpg.reward_max/2)/(cfg.ddpg.reward_max/2)
+        item = (x.squeeze(), action, r_scaled, xn.squeeze(), done)
         agent.memorize(item)
         x = xn
         if len(agent.memory) > 5 * cfg.ddpg.batch_size:
@@ -263,28 +264,36 @@ def evaluate(cfg, env, agent, dir_save_env):
 def main():
     cfg = load_config()
     env = PointMass2DPathFollowing(cfg)
-    agent = DDPG(cfg.ddpg)
-    noise = OrnsteinUhlenbeckNoise(cfg.noise)
     cfg.traj.trajectory = env.trajectory
     cfg.traj.theta_set = env.theta_set
     cfg.traj.curvature_set = env.curvature_set
     cfg.traj.yaw_T_set = env.yaw_T_set
+    noise = OrnsteinUhlenbeckNoise(cfg.noise)
     post_processing = PostProcessing(cfg)
+    node_set = cfg.ddpg.node_set
+    for node in node_set:
+        print(f"start with {node} node")
+        torch.manual_seed(0)
+        np.random.seed(0)
+        random.seed(0)
+        cfg.ddpg.actor_node = node
+        cfg.ddpg.critic_node = node
+        agent = DDPG(cfg.ddpg)
 
-    for epi in tqdm(range(cfg.num_train)):
-        train(cfg, env, agent, noise, epi)
+        for epi in tqdm(range(cfg.num_train)):
+            train(cfg, env, agent, noise, epi)
 
-        if (epi+1) % cfg.num_eval == 0:
-            dir_save = Path(cfg.dir, f"epi_after_{epi+1:05d}")
-            dir_save_env = Path(dir_save, "env_data.h5")
-            dir_save_agent = Path(dir_save, "agent_params.h5")
+            if (epi+1) % cfg.num_eval == 0:
+                dir_save = Path(cfg.dir, f"{node}node/epi_after_{epi+1:05d}")
+                dir_save_env = Path(dir_save, "env_data.h5")
+                dir_save_agent = Path(dir_save, "agent_params.h5")
 
-            evaluate(cfg, env, agent, dir_save_env)
-            agent.save_params(dir_save_agent)
-            post_processing.draw_plot(dir_save, dir_save_env)
+                evaluate(cfg, env, agent, dir_save_env)
+                agent.save_params(dir_save_agent)
+                post_processing.draw_plot(dir_save, dir_save_env)
+        post_processing.compare_eval(Path(cfg.dir, f"{node}node"))
+        print(f"end with {node} node")
     env.close()
-    post_processing.compare_eval()
-    
 
 if __name__ == "__main__":
     main()

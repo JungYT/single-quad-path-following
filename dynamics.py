@@ -72,10 +72,11 @@ class PointMass2DPathFollowing(BaseEnv):
                     cmd_yaw=cmd_yaw, action=action)
 
     def step(self, action):
-        *_, done = self.update(action=action)
+        *_, time_out = self.update(action=action)
         obs = self.observe()
-        self.reward = self.get_reward(self.obs)
-        return obs, self.reward, done
+        reward = self.get_reward(obs)
+        done = self.terminate(time_out, obs[0][0])
+        return obs, reward, done
 
     def observe(self):
         theta, curvature, yaw_T, distance = self.compute_closest()
@@ -86,6 +87,7 @@ class PointMass2DPathFollowing(BaseEnv):
             + np.cos(yaw_T)*(y - A*np.sin(2*theta))
         e_yaw = wrap(yaw - yaw_T)
         obs = np.hstack([y_T, e_yaw, curvature]).reshape(1,-1)
+
         self.obs = obs.squeeze()
         self.theta_min = theta
         self.curvature_min = curvature
@@ -98,9 +100,19 @@ class PointMass2DPathFollowing(BaseEnv):
                     distance_min=self.distance_min, yaw_T_min=self.yaw_T_min,
                     reward=self.reward, obs=self.obs)
 
+    def terminate(self, time_out, y_T):
+        done = 1. if (
+            abs(y_T) > self.cfg.ddpg.terminate_condition or time_out
+        ) else 0.
+        return done
+
     def get_reward(self, obs):
         y_T, e_yaw, *_ = obs.squeeze()
-        r = -abs(y_T) - e_yaw**2
+        if abs(y_T) > self.cfg.ddpg.terminate_condition:
+            r = -self.cfg.ddpg.reward_max
+        else:
+            r = -self.cfg.ddpg.reward_weight*abs(y_T) - e_yaw**2
+        self.reward = r
         return r
 
     def compute_closest(self):
@@ -137,7 +149,7 @@ class PointMass2DPathFollowing(BaseEnv):
             curvature_y = -sin2*(4 + cos2*(1-4*cos2)/den) \
                 / (4*A*cos2*np.sqrt(den))
             curvature_set[i] = [curvature_x, curvature_y]
-            yaw_T_set[i] = np.arctan2(-cos2, sin1)
+            yaw_T_set[i] = np.arctan2(cos2, -sin1)
         return trajectory, theta_set, curvature_set, yaw_T_set
 
 def wrap(angle):
