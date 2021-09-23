@@ -2,8 +2,12 @@ import numpy as np
 from pathlib import Path
 from matplotlib import pyplot as plt
 from collections import deque
+from matplotlib.animation import FuncAnimation
+import mpl_toolkits.mplot3d.art3d as art3d
+from matplotlib.patches import Circle
 
 import fym.logging as logging
+from fym.utils import rot
 
 
 class PostProcessing:
@@ -16,7 +20,7 @@ class PostProcessing:
             cfg.interval_validate
         )
 
-    def draw_plot(self, dir_save, dir_save_env):
+    def path_follow(self, dir_save, dir_save_env):
         env_data, info = logging.load(dir_save_env, with_info=True)
         cfg = info['cfg']
 
@@ -146,6 +150,133 @@ class PostProcessing:
         fig.savefig(Path(dir_save, "yaw_comapre.png"), bbox_inches='tight')
         plt.close('all')
 
+    def simple_guidance(self, dir_save, dir_save_env):
+        env_data, info = logging.load(dir_save_env, with_info=True)
+        cfg = info['cfg']
+
+        time = env_data['time']
+        cmd_euler = env_data['cmd_euler']*180/np.pi
+        cmd_f = env_data['cmd_f']
+        action = env_data['action']
+        disturbance = env_data['disturbance']
+        reward = np.delete(env_data['reward'], 0)
+        obs = env_data['obs']
+        pos = env_data['quad']['pos'].squeeze()
+        vel = env_data['quad']['vel'].squeeze()
+        euler = env_data['quad']['euler'].squeeze()*180/np.pi
+        thrust = env_data['quad']['thrust']
+
+        G = 0
+        for r in reward[::-1]:
+            G = r.item() + cfg.ddpg.discount*G
+        self.G_validate.append(G)
+        # print(f"Return: {G}")
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, pos[:,0])
+        ax[0].set_ylabel("X [m]")
+        ax[0].set_title("Position")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, pos[:,1])
+        ax[1].set_ylabel("Y [m]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, pos[:,2])
+        ax[2].set_ylabel('Z [m]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "position.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, vel[:,0])
+        ax[0].set_ylabel("$V_x$ [m/s]")
+        ax[0].set_title("Velocity")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, vel[:,1])
+        ax[1].set_ylabel("$V_y$ [m/s]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, pos[:,2])
+        ax[2].set_ylabel('$V_z$ [m/s]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "velocity.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        line1, = ax[0].plot(time, euler[:,0], 'r')
+        line2, = ax[0].plot(time, cmd_euler[:,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('true', 'cmd.'))
+        ax[0].set_ylabel(r"$\phi$ [deg]")
+        ax[0].set_title("Euler angle")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, euler[:,1], 'r', time, cmd_euler[:,1], 'b--')
+        ax[1].set_ylabel("r$\theta$ [deg]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, euler[:,2], 'r', time, cmd_euler[:,2], 'b--')
+        ax[2].set_ylabel(r'$\psi$ [deg]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "euler.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        line1, = ax[0].plot(time, thrust, 'r')
+        line2, = ax[0].plot(time, cmd_f, 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('true', 'cmd.'))
+        ax[0].set_ylabel("Thrust [N]")
+        ax[0].set_title("Action")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, action[:,1]*180/np.pi)
+        ax[1].set_ylabel("azimuth [deg]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, action[:,2]*180/np.pi)
+        ax[2].set_ylabel('elevation [deg]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "action.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, obs[:,0])
+        ax[0].set_ylabel("$e_X$ [m]")
+        ax[0].set_title("Position error")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, obs[:,1])
+        ax[1].set_ylabel("$e_Y$ [m]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, obs[:,2])
+        ax[2].set_ylabel('$e_Z$ [m]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "pos_error.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, disturbance[:,0])
+        ax[0].set_ylabel("X [N]")
+        ax[0].set_title("Disturbance")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, disturbance[:,1])
+        ax[1].set_ylabel("Y [N]")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, disturbance[:,2])
+        ax[2].set_ylabel('Z [N]')
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "disturbance.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, _ = plt.subplots(nrows=1, ncols=1, subplot_kw=dict(projection="3d"))
+        ani = Animator(fig, [env_data])
+        ani.animate()
+        ani.save(Path(dir_save, "animation.mp4"))
+
     def compare_validate(self, dir_save):
         fig, ax = plt.subplots(nrows=1, ncols=1)
         ax.plot(self.num_epi, list(self.G_avg), "*")
@@ -160,6 +291,104 @@ class PostProcessing:
         self.G_avg.append(np.array(self.G_validate).mean())
 
 
+class Quad_ani:
+    def __init__(self, ax):
+        d = 0.315
+        r = 0.15
 
+        body_segs = np.array([
+            [[d, 0, 0], [0, 0, 0]],
+            [[-d, 0, 0], [0, 0, 0]],
+            [[0, d, 0], [0, 0, 0]],
+            [[0, -d, 0], [0, 0, 0]]
+        ])
+        colors = (
+            (1, 0, 0, 1),
+            (0, 0, 1, 1),
+            (0, 0, 1, 1),
+            (0, 0, 1, 1),
+        )
+        self.body = art3d.Line3DCollection(
+            body_segs,
+            colors=colors,
+            linewidths=2
+        )
+
+        kwargs = dict(radius=r, ec="k", fc="k", alpha=0.3)
+        self.rotors = [
+            Circle((d, 0), **kwargs),
+            Circle((0, d), **kwargs),
+            Circle((-d, 0), **kwargs),
+            Circle((0, -d), **kwargs),
+        ]
+
+        ax.add_collection3d(self.body)
+        for rotor in self.rotors:
+            ax.add_patch(rotor)
+            art3d.pathpatch_2d_to_3d(rotor, z=0)
+
+        self.body._base = self.body._segments3d
+        for rotor in self.rotors:
+            rotor._segment3d = np.array(rotor._segment3d)
+            rotor._center = np.array(rotor._center + (0,))
+            rotor._base = rotor._segment3d
+
+    def set(self, pos, dcm=np.eye(3)):
+        self.body._segments3d = np.array([
+            dcm @ point for point in self.body._base.reshape(-1, 3)
+        ]).reshape(self.body._base.shape)
+
+        for rotor in self.rotors:
+            rotor._segment3d = np.array([
+                dcm @ point for point in rotor._base
+            ])
+
+        self.body._segments3d = self.body._segments3d + pos
+        for rotor in self.rotors:
+            rotor._segment3d += pos
+
+
+class Animator:
+    def __init__(self, fig, datalist):
+        self.offsets = ['collections', 'patches', 'lines', 'texts',
+                        'artists', 'images']
+        self.fig = fig
+        self.axes = fig.axes
+        self.datalist  = datalist
+
+    def init(self):
+        self.frame_artists = []
+        for ax in self.axes:
+            ax.quad = Quad_ani(ax)
+
+            for name in self.offsets:
+                self.frame_artists += getattr(ax, name)
+
+        self.fig.tight_layout()
+        return self.frame_artists
+
+    def get_sample(self, frame):
+        self.init()
+        self.update(frame)
+        self.fig.show()
+
+    def update(self, frame):
+        for data, ax in zip(self.datalist, self.axes):
+            pos = - data['quad']['pos'][frame].squeeze()
+            dcm = data['dcm'][frame].squeeze()
+            ax.quad.set(pos, dcm)
+        return self.frame_artists
+
+    def animate(self, *args, **kwargs):
+        data_len = len(self.datalist[0]['time'])
+        frames = range(0, data_len, 1)
+        self.anim = FuncAnimation(
+            self.fig, self.update, init_func=self.init,
+            frames=frames, interval=10, blit=True,
+            *args, **kwargs
+        )
+
+    def save(self, path, *args, **kwargs):
+        self.anim.save(path, writer="ffmpeg", fps=30, *args, **kwargs)
 
 

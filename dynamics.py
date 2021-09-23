@@ -2,6 +2,7 @@ import numpy as np
 import numpy.random as random
 
 from fym.core import BaseEnv, BaseSystem
+from fym.utils import rot
 
 class PointMass2D(BaseEnv):
     def __init__(self, cfg):
@@ -33,7 +34,7 @@ class PointMass2DPathFollowing(BaseEnv):
         self.distance_min = None
         self.obs = None
 
-    def reset(self ):
+    def reset(self):
         super().reset()
         self.quad.pos.state = np.vstack((
             random.uniform(
@@ -162,6 +163,104 @@ class PointMass2DPathFollowing(BaseEnv):
             yaw_T_set[i] = np.arctan2(cos2, -sin1)
             tangent_set[i] = [tangent_x, tangent_y]
         return trajectory, theta_set, curvature_set, yaw_T_set, tangent_set
+
+
+class SimpleQuad(BaseEnv):
+    def __init__(self, cfg):
+        super().__init__()
+        self.pos = BaseSystem(cfg.init_pos)
+        self.vel = BaseSystem(cfg.init_vel)
+        self.euler = BaseSystem(cfg.init_euler)
+        self.thrust = BaseSystem(cfg.mass*9.81)
+        self.tau_euler = cfg.tau_euler
+        self.tau_thrust = cfg.tau_thrust
+        self.mass = cfg.mass
+        self.z = np.vstack((0., 0., 1.))
+        self.g = -9.81*self.z
+
+    def set_dot(self, cmd_f, cmd_euler, disturbance):
+        self.pos.dot = self.vel.state
+        phi, theta, psi = self.euler.state.squeeze()
+        R = rot.angle2dcm(psi, theta, phi)
+        force = self.thrust.state*R.dot(self.z)
+        self.vel.dot = (force + disturbance)/self.mass + self.g
+        self.euler.dot = (-self.euler.state + cmd_euler) / self.tau_euler
+        self.thrust.dot = (-self.thrust.state + cmd_f) / self.tau_thrust
+
+
+class SimpleQuadGuidance(BaseEnv):
+    def __init__(self, cfg):
+        super().__init__(dt=cfg.dt, max_t=cfg.max_t)
+        self.quad = SimpleQuad(cfg.quad)
+        self.cfg = cfg
+        self.reward = None
+        self.obs = None
+
+    def reset(self, goal):
+        super().reset()
+        self.quad.pos.state = self.randomize(self.cfg.quad.rand_pos)
+        self.quad.vel.state = self.randomize(self.cfg.quad.rand_vel)
+        self.quad.euler.state = self.randomize(self.cfg.quad.rand_euler)
+        obs = self.observe(goal)
+        return obs
+
+    def set_dot(self, t, action, cmd_psi, disturbance):
+        cmd_f, cmd_euler = self.convert_action2cmd(action, cmd_psi)
+        self.quad.set_dot(cmd_f, cmd_euler, disturbance)
+        return dict(time=t, **self.observe_dict(), cmd_euler=cmd_euler, 
+                    cmd_f=cmd_f, action=action, disturbance=disturbance)
+
+    def step(self, action, goal, cmd_psi):
+        disturbance = np.vstack((0., 0., 0.))
+        *_, done = self.update(
+            action=action,
+            cmd_psi=cmd_psi,
+            disturbance=disturbance
+        )
+        obs = self.observe(goal)
+        reward = self.get_reward(obs)
+        return obs, reward, done
+
+    def convert_action2cmd(self, action, cmd_psi):
+        cmd_f, cmd_chi, cmd_gamma = action.squeeze()
+        z_des = rot.sph2cart2(1, cmd_chi, cmd_gamma)
+        cmd_phi, cmd_theta = self.convert_z2euler(z_des, cmd_psi)
+        cmd_euler = np.vstack((cmd_phi, cmd_theta, cmd_psi))
+        return cmd_f, cmd_euler
+
+    def convert_z2euler(self, z_des, psi):
+        z_n = rot.angle2dcm(psi, 0, 0).dot(z_des)
+        theta = np.arctan2(z_n[0], z_n[2]).item()
+        phi = np.arctan2(-z_n[1]*z_n[2], np.cos(theta)*(1-z_n[1]**2)).item()
+        return phi, theta
+
+    def observe(self, goal):
+        pos = self.quad.pos.state
+        vel = self.quad.vel.state
+        euler = self.quad.euler.state
+        e_pos = pos - goal
+        obs = np.hstack([e_pos, vel, euler]).reshape(1,-1)
+        self.obs = obs.squeeze()
+        return obs
+
+    def get_reward(self, obs):
+        e_pos = obs[0][0:3]
+        r = -np.sqrt(e_pos[0]**2 + e_pos[1]**2 + e_pos[2]**2)
+        self.reward = r
+        return r
+
+    def logger_callback(self, t, action, cmd_psi, disturbance):
+        phi, theta, psi = self.quad.euler.state.squeeze()
+        R = rot.angle2dcm(psi, theta, phi)
+        return dict(reward=self.reward, obs=self.obs, dcm=R)
+
+    def randomize(self, bound):
+        length = len(bound)
+        vec = np.ones((length, 1))
+        for i in range(len(bound)):
+            vec[i] = random.uniform(low=bound[i][0], high=bound[i][1])
+        return vec
+
 
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi

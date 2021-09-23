@@ -14,63 +14,11 @@ import torch.optim as optim
 import fym.logging as logging
 
 from dynamics import PointMass2DPathFollowing
+from dynamics import SimpleQuadGuidance
 from postProcessing import PostProcessing
+import config
 
-matplotlib.use('Agg')
-
-def load_config():
-    cfg = SN()
-    cfg.dt = 0.1
-    cfg.max_t = 10.
-    cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
-    cfg.num_train = 20000
-    cfg.num_validate = 10
-    cfg.interval_validate = 1000
-
-    cfg.quad = SN()
-    cfg.quad.tau_speed = 0.1
-    cfg.quad.tau_yaw = 0.1
-    cfg.quad.init_pos = np.vstack((-8., 5.))
-    cfg.quad.init_speed = 0.5
-    cfg.quad.init_yaw = -np.pi/4
-    cfg.quad.rand_pos = [[-12., 12.], [-8., 8.]]
-    cfg.quad.rand_speed = [-15., 15.]
-    cfg.quad.rand_yaw = [-np.pi, np.pi]
-
-    cfg.traj = SN()
-    cfg.traj.A = 4.
-    cfg.traj.split_num  = 354
-
-    cfg.ddpg = SN()
-    cfg.ddpg.dim_state = 4
-    cfg.ddpg.dim_action = 2
-    cfg.ddpg.action_max = np.array([3., np.pi/2])
-    cfg.ddpg.action_min = np.array([-3., -np.pi/2])
-    cfg.ddpg.action_scaling = torch.from_numpy(cfg.ddpg.action_max).float()
-    cfg.ddpg.memory_size = 300000
-    cfg.ddpg.actor_lr = 0.0001
-    cfg.ddpg.critic_lr = 0.001
-    cfg.ddpg.batch_size = 64
-    cfg.ddpg.discount = 0.999
-    cfg.ddpg.softupdate_rate = 0.001
-    cfg.ddpg.terminate_condition = 10
-    cfg.ddpg.reward_weight = 2
-    cfg.ddpg.reward_max = 21
-    cfg.ddpg.reward_scaling = 10
-    cfg.ddpg.reward_bias = 11
-    # cfg.ddpg.actor_node = 64
-    # cfg.ddpg.critic_node = 64
-    cfg.ddpg.node_set = [64, 128, 256]
-
-    cfg.noise = SN()
-    cfg.noise.rho = 0.01
-    cfg.noise.mu = np.zeros(cfg.ddpg.dim_action)
-    cfg.noise.sigma = 1 / cfg.ddpg.action_max
-    cfg.noise.size = cfg.ddpg.dim_action
-    cfg.noise.dt = cfg.dt
-    cfg.noise.x0 = None
-    cfg.noise.tau = 200
-    return cfg
+# matplotlib.use('Agg')
 
 
 class ActorNet(nn.Module):
@@ -89,7 +37,7 @@ class ActorNet(nn.Module):
         x1 = self.relu(self.bn1(self.lin1(state)))
         x2 = self.relu(self.bn2(self.lin2(x1)))
         x3 = self.tanh(self.lin3(x2))
-        x_scaled = x3 * self.cfg.action_scaling
+        x_scaled = (x3 + self.cfg.action_bias) * self.cfg.action_scaling
         return x_scaled
 
 class CriticNet(nn.Module):
@@ -228,7 +176,9 @@ class OrnsteinUhlenbeckNoise:
 
 
 def train(cfg, env, agent, noise, epi):
-    x = env.reset()
+    goal = cfg.quad.goal
+    cmd_psi = cfg.quad.cmd_psi
+    x = env.reset(goal)
     noise.reset()
     while True:
         agent.set_eval_mode()
@@ -238,9 +188,10 @@ def train(cfg, env, agent, noise, epi):
             cfg.ddpg.action_max,
             cfg.ddpg.action_min
         )
-        xn, r, done  = env.step(action)
-        r_scaled = (r + cfg.ddpg.reward_bias) / cfg.ddpg.reward_scaling
-        item = (x.squeeze(), action, r_scaled, xn.squeeze(), done)
+        xn, r, done  = env.step(action, goal, cmd_psi)
+        # r_scaled = (r + cfg.ddpg.reward_bias) / cfg.ddpg.reward_scaling
+        # item = (x.squeeze(), action, r_scaled, xn.squeeze(), done)
+        item = (x.squeeze(), action, r, xn.squeeze(), done)
         agent.memorize(item)
         x = xn
         if len(agent.memory) > 5 * cfg.ddpg.batch_size:
@@ -250,14 +201,16 @@ def train(cfg, env, agent, noise, epi):
             break
 
 def validate(cfg, env, agent, dir_save_env):
+    goal = cfg.quad.goal
+    cmd_psi = cfg.quad.cmd_psi
     agent.set_eval_mode()
     env.logger = logging.Logger(dir_save_env)
     env.logger.set_info(cfg=cfg)
 
-    x = env.reset()
+    x = env.reset(goal)
     while True:
         action = agent.get_action(x)
-        xn, _, done = env.step(action)
+        xn, _, done = env.step(action, goal, cmd_psi)
         x = xn
         if done:
             break
@@ -265,13 +218,15 @@ def validate(cfg, env, agent, dir_save_env):
 
 
 def main():
-    cfg = load_config()
-    env = PointMass2DPathFollowing(cfg)
-    cfg.traj.trajectory = env.trajectory
-    cfg.traj.theta_set = env.theta_set
-    cfg.traj.curvature_set = env.curvature_set
-    cfg.traj.yaw_T_set = env.yaw_T_set
-    cfg.traj.tangent_set = env.tangent_set
+    # cfg = config.path_follow()
+    # env = PointMass2DPathFollowing(cfg)
+    cfg = config.simple_guidance()
+    env = SimpleQuadGuidance(cfg)
+    # cfg.traj.trajectory = env.trajectory
+    # cfg.traj.theta_set = env.theta_set
+    # cfg.traj.curvature_set = env.curvature_set
+    # cfg.traj.yaw_T_set = env.yaw_T_set
+    # cfg.traj.tangent_set = env.tangent_set
     noise = OrnsteinUhlenbeckNoise(cfg.noise)
     post_processing = PostProcessing(cfg)
     node_set = cfg.ddpg.node_set
@@ -298,7 +253,8 @@ def main():
 
                     validate(cfg, env, agent, dir_save_env)
                     agent.save_params(dir_save_agent)
-                    post_processing.draw_plot(dir_save, dir_save_env)
+                    # post_processing.path_follow(dir_save, dir_save_env)
+                    post_processing.simple_guidance(dir_save, dir_save_env)
                 post_processing.average_return()
         post_processing.compare_validate(Path(cfg.dir, f"{node}node"))
         print(f"end with {node} node")
