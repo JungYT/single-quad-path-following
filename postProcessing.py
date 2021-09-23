@@ -8,11 +8,12 @@ import fym.logging as logging
 
 class PostProcessing:
     def __init__(self, cfg):
-        self.G = deque(maxlen=int(cfg.num_train/cfg.num_eval))
+        self.G_avg = deque(maxlen=int(cfg.num_train/cfg.interval_validate))
+        self.G_validate = deque(maxlen=cfg.num_validate)
         self.num_epi = np.arange(
-            cfg.num_eval,
-            cfg.num_train+cfg.num_eval,
-            cfg.num_eval
+            cfg.interval_validate,
+            cfg.num_train+cfg.interval_validate,
+            cfg.interval_validate
         )
 
     def draw_plot(self, dir_save, dir_save_env):
@@ -35,7 +36,8 @@ class PostProcessing:
         G = 0
         for r in reward[::-1]:
             G = r.item() + cfg.ddpg.discount*G
-        self.G.append(G)
+        G = G / len(reward)
+        self.G_validate.append(G)
         # print(f"Return: {G}")
 
         traj = np.array(cfg.traj.trajectory)
@@ -133,15 +135,30 @@ class PostProcessing:
         fig.savefig(Path(dir_save, "ddpg_action.png"), bbox_inches='tight')
         plt.close('all')
 
-    def compare_eval(self, dir_save):
         fig, ax = plt.subplots(nrows=1, ncols=1)
-        ax.plot(self.num_epi, list(self.G), "*")
-        ax.set_title("Return")
+        line1, = ax.plot(time, yaw, 'r')
+        line2, = ax.plot(time, yaw_T_min, 'b--')
+        ax.legend(handles=(line1, line2), labels=('true', 'des.'))
+        ax.set_ylabel(r"$\psi$ [deg]")
+        ax.set_title(" State")
+        ax.grid(True)
+        ax.set_xlabel("time [s]")
+        fig.savefig(Path(dir_save, "yaw_comapre.png"), bbox_inches='tight')
+        plt.close('all')
+
+    def compare_validate(self, dir_save):
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(self.num_epi, list(self.G_avg), "*")
+        ax.set_title("Average Return")
         ax.set_ylabel("G")
         ax.set_xlabel("number of trained episode")
         ax.grid(True)
         fig.savefig(Path(dir_save, "return.png"), bbox_inches='tight')
         plt.close('all')
+
+    def average_return(self):
+        self.G_avg.append(np.array(self.G_validate).mean())
+
 
 
 

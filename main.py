@@ -23,12 +23,13 @@ def load_config():
     cfg.dt = 0.1
     cfg.max_t = 10.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
-    cfg.num_train = 50000
-    cfg.num_eval = 1000
+    cfg.num_train = 20000
+    cfg.num_validate = 10
+    cfg.interval_validate = 1000
 
     cfg.quad = SN()
     cfg.quad.tau_speed = 0.1
-    cfg.quad.tau_yaw = 0.3
+    cfg.quad.tau_yaw = 0.1
     cfg.quad.init_pos = np.vstack((-8., 5.))
     cfg.quad.init_speed = 0.5
     cfg.quad.init_yaw = -np.pi/4
@@ -53,8 +54,10 @@ def load_config():
     cfg.ddpg.discount = 0.999
     cfg.ddpg.softupdate_rate = 0.001
     cfg.ddpg.terminate_condition = 10
-    cfg.ddpg.reward_weight = 20
-    cfg.ddpg.reward_max = 210
+    cfg.ddpg.reward_weight = 2
+    cfg.ddpg.reward_max = 21
+    cfg.ddpg.reward_scaling = 10
+    cfg.ddpg.reward_bias = 11
     # cfg.ddpg.actor_node = 64
     # cfg.ddpg.critic_node = 64
     cfg.ddpg.node_set = [64, 128, 256]
@@ -236,7 +239,7 @@ def train(cfg, env, agent, noise, epi):
             cfg.ddpg.action_min
         )
         xn, r, done  = env.step(action)
-        r_scaled = (r + cfg.ddpg.reward_max/2)/(cfg.ddpg.reward_max/2)
+        r_scaled = (r + cfg.ddpg.reward_bias) / cfg.ddpg.reward_scaling
         item = (x.squeeze(), action, r_scaled, xn.squeeze(), done)
         agent.memorize(item)
         x = xn
@@ -246,12 +249,12 @@ def train(cfg, env, agent, noise, epi):
         if done:
             break
 
-def evaluate(cfg, env, agent, dir_save_env):
+def validate(cfg, env, agent, dir_save_env):
     agent.set_eval_mode()
     env.logger = logging.Logger(dir_save_env)
     env.logger.set_info(cfg=cfg)
 
-    x = env.reset(random_init=False)
+    x = env.reset()
     while True:
         action = agent.get_action(x)
         xn, _, done = env.step(action)
@@ -268,6 +271,7 @@ def main():
     cfg.traj.theta_set = env.theta_set
     cfg.traj.curvature_set = env.curvature_set
     cfg.traj.yaw_T_set = env.yaw_T_set
+    cfg.traj.tangent_set = env.tangent_set
     noise = OrnsteinUhlenbeckNoise(cfg.noise)
     post_processing = PostProcessing(cfg)
     node_set = cfg.ddpg.node_set
@@ -283,15 +287,20 @@ def main():
         for epi in tqdm(range(cfg.num_train)):
             train(cfg, env, agent, noise, epi)
 
-            if (epi+1) % cfg.num_eval == 0:
-                dir_save = Path(cfg.dir, f"{node}node/epi_after_{epi+1:05d}")
-                dir_save_env = Path(dir_save, "env_data.h5")
-                dir_save_agent = Path(dir_save, "agent_params.h5")
+            if (epi+1) % cfg.interval_validate == 0:
+                for epi_val in range(cfg.num_validate):
+                    dir_save = Path(
+                        cfg.dir,
+                        f"{node}node/epi_after_{epi+1:05d}/val_{epi_val+1}"
+                    )
+                    dir_save_env = Path(dir_save, "env_data.h5")
+                    dir_save_agent = Path(dir_save, "agent_params.h5")
 
-                evaluate(cfg, env, agent, dir_save_env)
-                agent.save_params(dir_save_agent)
-                post_processing.draw_plot(dir_save, dir_save_env)
-        post_processing.compare_eval(Path(cfg.dir, f"{node}node"))
+                    validate(cfg, env, agent, dir_save_env)
+                    agent.save_params(dir_save_agent)
+                    post_processing.draw_plot(dir_save, dir_save_env)
+                post_processing.average_return()
+        post_processing.compare_validate(Path(cfg.dir, f"{node}node"))
         print(f"end with {node} node")
     env.close()
 
