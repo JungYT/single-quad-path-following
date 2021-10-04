@@ -10,9 +10,10 @@ import torch.nn as nn
 import torch.optim as optim
 import fym.logging as logging
 
-# from dynamics import PointMass2DPathFollowing
-# from dynamics import SimpleQuadGuidance
+from dynamics import PointMass2DPathFollowing
+from dynamics import SimpleQuadGuidance
 from dynamics import PointMass2DLinearOptimal
+from dynamics import InvertedPendulum
 from postProcessing import PostProcessing
 import config
 
@@ -215,9 +216,11 @@ def main():
     # cfg = config.path_follow()
     # env = PointMass2DPathFollowing(cfg)
     # cfg = config.simple_guidance()
-    cfg = config.pointmass_linear()
+    # cfg = config.pointmass_linear()
+    cfg = config.pendulum()
     # env = SimpleQuadGuidance(cfg)
-    env = PointMass2DLinearOptimal(cfg)
+    # env = PointMass2DLinearOptimal(cfg)
+    env = InvertedPendulum()
     # cfg.traj.trajectory = env.trajectory
     # cfg.traj.theta_set = env.theta_set
     # cfg.traj.curvature_set = env.curvature_set
@@ -251,7 +254,8 @@ def main():
                     agent.save_params(dir_save_agent)
                     # post_processing.path_follow(dir_save, dir_save_env)
                     # post_processing.simple_guidance(dir_save, dir_save_env)
-                    post_processing.pointmass_linear(dir_save, dir_save_env)
+                    # post_processing.pointmass_linear(dir_save, dir_save_env)
+                    post_processing.pendulum(dir_save, dir_save_env)
                 post_processing.average_return()
         post_processing.compare_validate(Path(cfg.dir, f"{node}node"))
         print(f"end with {node} node")

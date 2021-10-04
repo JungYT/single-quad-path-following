@@ -173,3 +173,39 @@ def pointmass_linear():
     cfg.noise.tau = 200
     return cfg
 
+def pendulum():
+    cfg = SN()
+    cfg.dt = 0.1
+    cfg.max_t = 5.
+    cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
+    cfg.num_train = 1000
+    cfg.num_validate = 5
+    cfg.interval_validate = 100
+
+    cfg.ddpg = SN()
+    cfg.ddpg.dim_state = 3
+    cfg.ddpg.dim_action = 1
+    cfg.ddpg.action_max = 2.
+    cfg.ddpg.action_min = -2.
+    cfg.ddpg.action_scaling = 2.
+    cfg.ddpg.action_bias = 0
+    cfg.ddpg.memory_size = 20000
+    cfg.ddpg.actor_lr = 0.0001
+    cfg.ddpg.critic_lr = 0.001
+    cfg.ddpg.batch_size = 64
+    cfg.ddpg.discount = 0.95
+    cfg.ddpg.softupdate_rate = 0.001
+    cfg.ddpg.terminate_condition = 10
+    cfg.ddpg.reward_weight = 20
+    cfg.ddpg.reward_max = 210
+    cfg.ddpg.node_set = [16, 32, 64]
+
+    cfg.noise = SN()
+    cfg.noise.rho = 0.01
+    cfg.noise.mu = np.zeros(cfg.ddpg.dim_action)
+    cfg.noise.sigma = 1 / cfg.ddpg.action_max
+    cfg.noise.size = cfg.ddpg.dim_action
+    cfg.noise.dt = cfg.dt
+    cfg.noise.x0 = None
+    cfg.noise.tau = 200
+    return cfg

@@ -397,6 +397,44 @@ class PostProcessing:
         fig.savefig(Path(dir_save, "reward.png"), bbox_inches='tight')
         plt.close('all')
 
+    def pendulum(self, dir_save, dir_save_env):
+        env_data, info = logging.load(dir_save_env, with_info=True)
+        cfg = info['cfg']
+
+        time = env_data['time']
+        action = env_data['action']
+        reward = env_data['reward'].squeeze()
+        theta = env_data['pendulum']['th'].squeeze()
+        thetadot = env_data['pendulum']['thdot'].squeeze()
+
+        G = 0
+        for r in reward[::-1]:
+            G = r.item() + cfg.ddpg.discount*G
+        self.G_validate.append(G)
+        # print(f"Return: {G}")
+
+        fig, ax = plt.subplots(nrows=2, ncols=1)
+        ax[0].plot(time, theta*180/np.pi)
+        ax[0].set_ylabel(r"$\theta$ [deg]")
+        ax[0].set_title("State")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, thetadot*180/np.pi)
+        ax[1].set_ylabel(r"$\dot{\theta}$ [deg/s]")
+        ax[1].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(2)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "state.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(time, reward)
+        ax.set_title(f"Reward (Return: {int(G)})")
+        ax.set_ylabel('r')
+        ax.set_xlabel('time [s]')
+        ax.grid(True)
+        fig.savefig(Path(dir_save, "reward.png"), bbox_inches='tight')
+        plt.close('all')
+
     def compare_validate(self, dir_save):
         fig, ax = plt.subplots(nrows=1, ncols=1)
         ax.plot(self.num_epi, list(self.G_avg), "*")

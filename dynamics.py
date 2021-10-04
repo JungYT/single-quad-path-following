@@ -34,6 +34,67 @@ class PointMass2DLinear(BaseEnv):
         self.vel.dot = force / self.m
 
 
+class Pendulum(BaseEnv):
+    def __init__(self):
+        super().__init__()
+        # self.th = BaseSystem(np.vstack([0.]))
+        # self.thdot = BaseSystem(np.vstack([0.]))
+        self.th = BaseSystem(np.array([0.]))
+        self.thdot = BaseSystem(np.array([0.]))
+        self.g = 10
+        self.m = 1.
+        self.l = 1.
+        self.max_u = 2.
+        self.max_speed = 8.
+
+    def set_dot(self, u):
+        th = self.th.state
+        thdot = self.thdot.state
+
+        thdot_tmp = -3 * self.g / (2 * self.l) * np.sin(th + np.pi) \
+            + 3. / (self.m * self.l ** 2) * u
+
+        self.th.dot = thdot
+        self.thdot.dot = np.clip(thdot_tmp, -self.max_speed, self.max_speed)
+
+
+class InvertedPendulum(BaseEnv):
+    def __init__(self):
+        super().__init__(dt=0.05, max_t=20)
+        self.pendulum = Pendulum()
+
+    def reset(self):
+        super().reset()
+        self.pendulum.th.state = randomize([[-np.pi, np.pi]])
+        self.pendulum.thdot.state = randomize([[-1, 1]])
+        obs = self.observe()
+        return obs
+
+    def step(self, u):
+        *_, done = self.update(u=u)
+        r = self.get_reward(u)
+        obs = self.observe()
+        return obs, r, done
+
+    def set_dot(self, t, u):
+        self.pendulum.set_dot(u)
+        reward = self.get_reward(u)
+        return dict(time=t, **self.observe_dict(), reward=reward, action=u)
+
+    def get_reward(self, u):
+        th = self.pendulum.th.state
+        thdot = self.pendulum.thdot.state
+        th = wrap(th)
+        r = -th ** 2 - 0.1 * thdot ** 2 - 0.001 * u ** 2
+        return r
+
+    def observe(self):
+        th = self.pendulum.th.state
+        thdot = self.pendulum.thdot.state
+        obs = np.hstack([ np.cos(th), np.sin(th), thdot ]).reshape(1, -1)
+        return obs
+
+
 class PointMass2DPathFollowing(BaseEnv):
     def __init__(self, cfg):
         super().__init__(dt=cfg.dt, max_t=cfg.max_t)
@@ -212,9 +273,9 @@ class SimpleQuadGuidance(BaseEnv):
 
     def reset(self, goal):
         super().reset()
-        self.quad.pos.state = self.randomize(self.cfg.quad.rand_pos)
-        self.quad.vel.state = self.randomize(self.cfg.quad.rand_vel)
-        self.quad.euler.state = self.randomize(self.cfg.quad.rand_euler)
+        self.quad.pos.state = randomize(self.cfg.quad.rand_pos)
+        self.quad.vel.state = randomize(self.cfg.quad.rand_vel)
+        self.quad.euler.state = randomize(self.cfg.quad.rand_euler)
         obs = self.observe(goal)
         return obs
 
@@ -270,13 +331,6 @@ class SimpleQuadGuidance(BaseEnv):
         phi, theta, psi = self.quad.euler.state.squeeze()
         R = rot.angle2dcm(psi, theta, phi)
         return dict(reward=reward, obs=obs.squeeze(), dcm=R)
-
-    def randomize(self, bound):
-        length = len(bound)
-        vec = np.ones((length, 1))
-        for i in range(len(bound)):
-            vec[i] = random.uniform(low=bound[i][0], high=bound[i][1])
-        return vec
 
 
 class PointMass2DLinearOptimal(BaseEnv):
@@ -340,3 +394,10 @@ class PointMass2DLinearOptimal(BaseEnv):
 
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
+
+def randomize(bound):
+    length = len(bound)
+    vec = np.ones((length, 1))
+    for i in range(len(bound)):
+        vec[i] = random.uniform(low=bound[i][0], high=bound[i][1])
+    return vec
