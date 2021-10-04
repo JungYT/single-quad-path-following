@@ -161,7 +161,7 @@ def pointmass_linear():
     cfg.ddpg.reward_bias = 11
     # cfg.ddpg.actor_node = 64
     # cfg.ddpg.critic_node = 64
-    cfg.ddpg.node_set = [16, 32, 64]
+    cfg.ddpg.node_set = [128, 256, 64]
 
     cfg.noise = SN()
     cfg.noise.rho = 0.01
@@ -178,9 +178,9 @@ def pendulum():
     cfg.dt = 0.1
     cfg.max_t = 5.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
-    cfg.num_train = 1000
-    cfg.num_validate = 5
-    cfg.interval_validate = 100
+    cfg.num_train = 100
+    cfg.num_validate = 3
+    cfg.interval_validate = 10
 
     cfg.ddpg = SN()
     cfg.ddpg.dim_state = 3
