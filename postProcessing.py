@@ -165,6 +165,7 @@ class PostProcessing:
         vel = env_data['quad']['vel'].squeeze()
         euler = env_data['quad']['euler'].squeeze()*180/np.pi
         thrust = env_data['quad']['thrust']
+        goal = env_data['goal']
 
         G = 0
         for r in reward[::-1]:
@@ -173,14 +174,16 @@ class PostProcessing:
         # print(f"Return: {G}")
 
         fig, ax = plt.subplots(nrows=3, ncols=1)
-        ax[0].plot(time, pos[:,0])
+        line1, = ax[0].plot(time, pos[:,0], 'r')
+        line2, = ax[0].plot(time, goal[:,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('true', 'goal'))
         ax[0].set_ylabel("X [m]")
         ax[0].set_title("Position")
         ax[0].axes.xaxis.set_ticklabels([])
-        ax[1].plot(time, pos[:,1])
+        ax[1].plot(time, pos[:,1], 'r', time, goal[:,1], 'b--')
         ax[1].set_ylabel("Y [m]")
         ax[1].axes.xaxis.set_ticklabels([])
-        ax[2].plot(time, pos[:,2])
+        ax[2].plot(time, pos[:,2], 'r', time, goal[:,2], 'b--')
         ax[2].set_ylabel('Z [m]')
         ax[2].set_xlabel("time [s]")
         [ax[i].grid(True) for i in range(3)]
@@ -196,7 +199,7 @@ class PostProcessing:
         ax[1].plot(time, vel[:,1])
         ax[1].set_ylabel("$V_y$ [m/s]")
         ax[1].axes.xaxis.set_ticklabels([])
-        ax[2].plot(time, pos[:,2])
+        ax[2].plot(time, vel[:,2])
         ax[2].set_ylabel('$V_z$ [m/s]')
         ax[2].set_xlabel("time [s]")
         [ax[i].grid(True) for i in range(3)]
@@ -212,7 +215,7 @@ class PostProcessing:
         ax[0].set_title("Euler angle")
         ax[0].axes.xaxis.set_ticklabels([])
         ax[1].plot(time, euler[:,1], 'r', time, cmd_euler[:,1], 'b--')
-        ax[1].set_ylabel("r$\theta$ [deg]")
+        ax[1].set_ylabel(r"$\theta$ [deg]")
         ax[1].axes.xaxis.set_ticklabels([])
         ax[2].plot(time, euler[:,2], 'r', time, cmd_euler[:,2], 'b--')
         ax[2].set_ylabel(r'$\psi$ [deg]')
@@ -272,10 +275,127 @@ class PostProcessing:
         fig.savefig(Path(dir_save, "disturbance.png"), bbox_inches='tight')
         plt.close('all')
 
-        fig, _ = plt.subplots(nrows=1, ncols=1, subplot_kw=dict(projection="3d"))
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(time[1::], reward)
+        ax.set_title(f"Reward (Return: {int(G)})")
+        ax.set_ylabel('r')
+        ax.set_xlabel('time [s]')
+        ax.grid(True)
+        fig.savefig(Path(dir_save, "reward.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, _ = plt.subplots(1, 1, subplot_kw=dict(projection="3d"))
         ani = Animator(fig, [env_data])
         ani.animate()
         ani.save(Path(dir_save, "animation.mp4"))
+        plt.close('all')
+
+    def pointmass_linear(self, dir_save, dir_save_env):
+        env_data, info = logging.load(dir_save_env, with_info=True)
+        cfg = info['cfg']
+
+        time = env_data['time']
+        action = env_data['action']
+        reward = env_data['reward']
+        u = env_data['u']
+        pos = env_data['quad']['pos'].squeeze()
+        vel = env_data['quad']['vel'].squeeze()
+        LQR_lambda = env_data['LQR_lambda']
+        LQR_u = env_data['LQR_u']
+        LQR_P = env_data['LQR_P']
+
+        G = 0
+        for r in reward[::-1]:
+            G = r.item() + cfg.ddpg.discount*G
+        self.G_validate.append(G)
+        # print(f"Return: {G}")
+
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(pos[:,0], pos[:,1])
+        ax.set_ylabel('Y [m]')
+        ax.set_xlabel('X [m]')
+        ax.set_title('Trajectory')
+        ax.grid(True)
+        fig.savefig(Path(dir_save, "trajectory.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=2, ncols=1)
+        ax[0].plot(time, pos[:,0])
+        ax[0].set_ylabel("X [m]")
+        ax[0].set_title("Position")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, pos[:,1])
+        ax[1].set_ylabel("Y [m]")
+        ax[1].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(2)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "position.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=2, ncols=1)
+        ax[0].plot(time, vel[:,0])
+        ax[0].set_ylabel("$V_x$ [m/s]")
+        ax[0].set_title("Velocity")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, vel[:,1])
+        ax[1].set_ylabel("$V_y$ [m/s]")
+        ax[1].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(2)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "velocity.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=4, ncols=1)
+        line1, = ax[0].plot(time, action[:,0], 'r')
+        line2, = ax[0].plot(time, LQR_lambda[:,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('RL', 'LQR'))
+        ax[0].set_ylabel(r"$\lambda_1$")
+        ax[0].set_title("Costate")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, action[:,1], 'r', time, LQR_lambda[:,1], 'b--')
+        ax[1].set_ylabel(r"$\lambda_2$")
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[2].plot(time, action[:,2], 'r', time, LQR_lambda[:,2], 'b--')
+        ax[2].set_ylabel(r"$\lambda_3$")
+        ax[2].axes.xaxis.set_ticklabels([])
+        ax[3].plot(time, action[:,3], 'r', time, LQR_lambda[:,3], 'b--')
+        ax[3].set_ylabel(r'$\lambda_4$')
+        ax[3].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(4)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "costate.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=2, ncols=1)
+        line1, = ax[0].plot(time, u[:,0], 'r')
+        line2, = ax[0].plot(time, LQR_u[:,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('RL', 'LQR'))
+        ax[0].set_ylabel(r"$u_x$ [N]")
+        ax[0].set_title("Input Force")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].plot(time, u[:,1], 'r', time, LQR_u[:,1], 'b--')
+        ax[1].set_ylabel(r'$u_y$ [N]')
+        ax[1].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(2)]
+        fig.align_ylabels(ax)
+        fig.savefig(Path(dir_save, "input.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=4, ncols=4)
+        for i in range(16):
+            ax[i//4, i%4].plot(time, LQR_P[:, i//4, i%4])
+            ax[i//4, i%4].grid(True)
+        fig.savefig(Path(dir_save, "LQR_P.png"), bbox_inches='tight')
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(time, reward)
+        ax.set_title(f"Reward (Return: {int(G)})")
+        ax.set_ylabel('r')
+        ax.set_xlabel('time [s]')
+        ax.grid(True)
+        fig.savefig(Path(dir_save, "reward.png"), bbox_inches='tight')
+        plt.close('all')
 
     def compare_validate(self, dir_save):
         fig, ax = plt.subplots(nrows=1, ncols=1)
@@ -293,8 +413,8 @@ class PostProcessing:
 
 class Quad_ani:
     def __init__(self, ax):
-        d = 0.315
-        r = 0.15
+        d = 1.
+        r = 0.5
 
         body_segs = np.array([
             [[d, 0, 0], [0, 0, 0]],
@@ -361,6 +481,10 @@ class Animator:
         for ax in self.axes:
             ax.quad = Quad_ani(ax)
 
+            ax.set_xlim3d(-10, 10)
+            ax.set_ylim3d(-10, 10)
+            ax.set_zlim3d(-10, 10)
+
             for name in self.offsets:
                 self.frame_artists += getattr(ax, name)
 
@@ -374,7 +498,7 @@ class Animator:
 
     def update(self, frame):
         for data, ax in zip(self.datalist, self.axes):
-            pos = - data['quad']['pos'][frame].squeeze()
+            pos = data['quad']['pos'][frame].squeeze()
             dcm = data['dcm'][frame].squeeze()
             ax.quad.set(pos, dcm)
         return self.frame_artists

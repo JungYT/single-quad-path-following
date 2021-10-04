@@ -1,24 +1,22 @@
 import numpy as np
 import random
-from types import SimpleNamespace as SN
 from pathlib import Path
 from tqdm import tqdm
-from datetime import datetime
-# from matplotlib import pyplot as plt
-import matplotlib
 from collections import deque
+import matplotlib
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import fym.logging as logging
 
-from dynamics import PointMass2DPathFollowing
-from dynamics import SimpleQuadGuidance
+# from dynamics import PointMass2DPathFollowing
+# from dynamics import SimpleQuadGuidance
+from dynamics import PointMass2DLinearOptimal
 from postProcessing import PostProcessing
 import config
 
-# matplotlib.use('Agg')
+matplotlib.use('Agg')
 
 
 class ActorNet(nn.Module):
@@ -176,9 +174,7 @@ class OrnsteinUhlenbeckNoise:
 
 
 def train(cfg, env, agent, noise, epi):
-    goal = cfg.quad.goal
-    cmd_psi = cfg.quad.cmd_psi
-    x = env.reset(goal)
+    x = env.reset()
     noise.reset()
     while True:
         agent.set_eval_mode()
@@ -188,7 +184,7 @@ def train(cfg, env, agent, noise, epi):
             cfg.ddpg.action_max,
             cfg.ddpg.action_min
         )
-        xn, r, done  = env.step(action, goal, cmd_psi)
+        xn, r, done  = env.step(action)
         # r_scaled = (r + cfg.ddpg.reward_bias) / cfg.ddpg.reward_scaling
         # item = (x.squeeze(), action, r_scaled, xn.squeeze(), done)
         item = (x.squeeze(), action, r, xn.squeeze(), done)
@@ -201,16 +197,14 @@ def train(cfg, env, agent, noise, epi):
             break
 
 def validate(cfg, env, agent, dir_save_env):
-    goal = cfg.quad.goal
-    cmd_psi = cfg.quad.cmd_psi
     agent.set_eval_mode()
     env.logger = logging.Logger(dir_save_env)
     env.logger.set_info(cfg=cfg)
 
-    x = env.reset(goal)
+    x = env.reset()
     while True:
-        action = agent.get_action(x)
-        xn, _, done = env.step(action, goal, cmd_psi)
+        action = agent.get_action(x, net='target')
+        xn, _, done = env.step(action)
         x = xn
         if done:
             break
@@ -220,8 +214,10 @@ def validate(cfg, env, agent, dir_save_env):
 def main():
     # cfg = config.path_follow()
     # env = PointMass2DPathFollowing(cfg)
-    cfg = config.simple_guidance()
-    env = SimpleQuadGuidance(cfg)
+    # cfg = config.simple_guidance()
+    cfg = config.pointmass_linear()
+    # env = SimpleQuadGuidance(cfg)
+    env = PointMass2DLinearOptimal(cfg)
     # cfg.traj.trajectory = env.trajectory
     # cfg.traj.theta_set = env.theta_set
     # cfg.traj.curvature_set = env.curvature_set
@@ -254,7 +250,8 @@ def main():
                     validate(cfg, env, agent, dir_save_env)
                     agent.save_params(dir_save_agent)
                     # post_processing.path_follow(dir_save, dir_save_env)
-                    post_processing.simple_guidance(dir_save, dir_save_env)
+                    # post_processing.simple_guidance(dir_save, dir_save_env)
+                    post_processing.pointmass_linear(dir_save, dir_save_env)
                 post_processing.average_return()
         post_processing.compare_validate(Path(cfg.dir, f"{node}node"))
         print(f"end with {node} node")
